@@ -287,19 +287,7 @@ def _worker(args: tuple) -> dict:
     all_col_acts, all_col_lps                 = [], []
     wins = 0
 
-    for ep in range(n_episodes):
-        agent    = PPOCollectorAgent(model)
-        opp_name = random.choice(opponent_names)
-        opp      = _opp_map[opp_name]()
-
-        agents = [agent, opp] if ep % 2 == 0 else [opp, agent]
-
-        # Monkey-patch: UnoGame calls agent.name and agent.choose_card/color
-        result = UnoGame(agents).play()
-        won    = result.winner == "NN"
-        wins  += int(won)
-
-        steps = agent.flush(won, gamma, gae_lambda, reward_shaping)
+    def _append_steps(steps: list[dict]) -> None:
         for s in steps:
             all_states.append(s["state"])
             all_actions.append(s["action"])
@@ -310,6 +298,32 @@ def _worker(args: tuple) -> dict:
             all_rets.append(s["return"])
             all_col_acts.append(s["color_action"])
             all_col_lps.append(s["color_lp"])
+
+    for ep in range(n_episodes):
+        opp_name = random.choice(opponent_names)
+
+        if opp_name == "self":
+            # ── Pure self-play ────────────────────────────────────────
+            # Both agents use the current model weights.
+            # Collecting from both sides doubles data per game and
+            # gives the model a symmetric training signal.
+            a0 = PPOCollectorAgent(model); a0.name = "NN_0"
+            a1 = PPOCollectorAgent(model); a1.name = "NN_1"
+            order  = [a0, a1] if ep % 2 == 0 else [a1, a0]
+            result = UnoGame(order).play()
+            won0   = result.winner == "NN_0"
+            wins  += int(won0)   # tracks agent-0 wins; expect ~50% at convergence
+            _append_steps(a0.flush( won0, gamma, gae_lambda, reward_shaping))
+            _append_steps(a1.flush(not won0, gamma, gae_lambda, reward_shaping))
+        else:
+            # ── vs fixed heuristic opponent ───────────────────────────
+            agent  = PPOCollectorAgent(model)
+            opp    = _opp_map[opp_name]()
+            agents = [agent, opp] if ep % 2 == 0 else [opp, agent]
+            result = UnoGame(agents).play()
+            won    = result.winner == "NN"
+            wins  += int(won)
+            _append_steps(agent.flush(won, gamma, gae_lambda, reward_shaping))
 
     return {
         "states":          np.array(all_states,   dtype=np.float32),

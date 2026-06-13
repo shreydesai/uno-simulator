@@ -210,6 +210,25 @@ def ppo_update(
 #  Main training loop                                                  #
 # ------------------------------------------------------------------ #
 
+def quick_eval(model: UnoNet, n_games: int = 500, device: str = "cpu") -> dict[str, float]:
+    """
+    Evaluate win rates vs Greedy and Smart (greedy inference, no training).
+    Used as the periodic ground-truth signal during RL training.
+    """
+    import random
+    from simulate import run_matchup
+    from uno.strategies.greedy_agent import GreedyAgent
+    from uno.strategies.smart_agent import SmartAgent
+    from uno.strategies.nn_agent import NNAgent
+
+    random.seed(0)
+    nn = NNAgent("NN", model, device=device, greedy=True)
+    return {
+        "vs_greedy": run_matchup(nn, GreedyAgent("Greedy"), n_games=n_games)["win_rates"]["NN"],
+        "vs_smart":  run_matchup(nn, SmartAgent("Smart"),   n_games=n_games)["win_rates"]["NN"],
+    }
+
+
 def train_ppo(
     model:           UnoNet,
     opponent_names:  list[str]  = ("random", "greedy", "smart"),
@@ -230,6 +249,7 @@ def train_ppo(
     reward_shaping:  float = 0.0,
     log_every:       int   = 10,
     save_every:      int   = 50,
+    eval_every:      int   = 25,   # 0 to disable; runs quick_eval vs Greedy+Smart
     device:          str   = "cpu",
     ckpt_path:       str   = CKPT_PPO,
 ) -> UnoNet:
@@ -303,7 +323,18 @@ def train_ppo(
                 f"lr={cur_lr:.2e}  {es}  [{elapsed:.1f}s]"
             )
 
-        # ── 5. Checkpoint ──────────────────────────────────────────────
+        # ── 5. Periodic evaluation (ground-truth signal) ───────────────
+        if eval_every > 0 and it % eval_every == 0:
+            model.eval()
+            rates = quick_eval(model, n_games=500, device=device)
+            model.train()
+            g, s = rates["vs_greedy"] * 100, rates["vs_smart"] * 100
+            print(
+                f"  ├─ eval  vs_greedy={g:.1f}%  vs_smart={s:.1f}%  "
+                f"{'▲ above SL baseline' if s > 50.3 else '▼ below SL baseline'}"
+            )
+
+        # ── 6. Checkpoint ──────────────────────────────────────────────
         if it % save_every == 0:
             os.makedirs(os.path.dirname(ckpt_path), exist_ok=True)
             model.save(ckpt_path)
@@ -362,10 +393,12 @@ def main() -> None:
     parser.add_argument("--reward-shaping", type=float, default=0.0,
                         help="Per-step reward penalty (e.g. -0.001 discourages long games)")
     parser.add_argument("--target-kl",   type=float, default=0.01)
+    parser.add_argument("--eval-every",  type=int,   default=25,
+                        help="Evaluate vs Greedy+Smart every N iters (0=off)")
     parser.add_argument("--opponent",
-                        choices=["random", "greedy", "smart", "pool"],
-                        default="pool",
-                        help="'pool' trains against all three opponents")
+                        choices=["random", "greedy", "smart", "pool", "self"],
+                        default="self",
+                        help="'self'=pure self-play  'pool'=mixed heuristics")
     parser.add_argument("--init",
                         choices=["random", "supervised"],
                         default="supervised",
@@ -387,6 +420,7 @@ def main() -> None:
         "greedy": ["greedy"],
         "smart":  ["smart"],
         "pool":   ["random", "greedy", "smart"],
+        "self":   ["self"],
     }
     opponent_names = opp_map[args.opponent]
 
@@ -417,6 +451,7 @@ def main() -> None:
         gae_lambda=args.gae_lambda,
         reward_shaping=args.reward_shaping,
         target_kl=args.target_kl,
+        eval_every=args.eval_every,
         device=args.device,
     )
 
