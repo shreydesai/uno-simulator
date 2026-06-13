@@ -123,7 +123,7 @@ class NNAgent(Agent):
 
         ctx = torch.no_grad() if not self.training_mode else torch.enable_grad()
         with ctx:
-            card_logits, color_logits = self.model(state_t)
+            card_logits, color_logits, _value = self.model(state_t)
 
         # Cache color logits for choose_color (same forward pass)
         self._cached_color_logits = color_logits.squeeze(0).detach()
@@ -162,7 +162,7 @@ class NNAgent(Agent):
             state_t = torch.tensor(encode_state(state), dtype=torch.float32,
                                    device=self.device).unsqueeze(0)
             with torch.no_grad():
-                _, logits = self.model(state_t)
+                _, logits, _val = self.model(state_t)
             logits = logits.squeeze(0)
 
         if self.greedy:

@@ -77,7 +77,7 @@ def train(
             masks   = batch["mask"].to(device)
             colors  = batch["color"].to(device)
 
-            card_logits, color_logits = model(states)
+            card_logits, color_logits, _ = model(states)
 
             # Mask illegal card actions
             card_logits_m = card_logits.clone()
@@ -115,7 +115,7 @@ def train(
                 actions = batch["action"].to(device)
                 masks   = batch["mask"].to(device)
 
-                card_logits, _ = model(states)
+                card_logits, _, __ = model(states)
                 card_logits[~masks] = float("-inf")
                 loss  = ce(card_logits, actions)
                 preds = card_logits.argmax(dim=1)

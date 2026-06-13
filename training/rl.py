@@ -125,7 +125,7 @@ def reinforce(
             returns_t = (returns_t - returns_t.mean()) / (returns_t.std() + 1e-8)
 
         # ── Policy gradient update ────────────────────────────────────
-        card_logits, _ = model(states_t)             # (T, ACTION_DIM)
+        card_logits, _, __ = model(states_t)          # (T, ACTION_DIM)
         card_logits[~masks_t] = float("-inf")
 
         log_probs = F.log_softmax(card_logits, dim=1)  # (T, ACTION_DIM)
