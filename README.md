@@ -16,7 +16,7 @@ Win rates over **10,000 games** each (alternating first player). Rows = the agen
 | **NN-SL** | **60.6%** | **55.2%** | **50.3%** | — | Imitation from Smart |
 | NN-PPO (fixed opp.) | 56.5% | 51.4% | 46.1% | 45.8% | PPO vs mixed pool — *regressed* |
 | NN-SP (pure self-play) | 60.1% | 54.8% | 49.7% | 49.0% | Maintained quality, didn't improve |
-| **NN-ISL** | TBD | TBD | TBD | TBD | Iterative SL on self-play data *(in progress)* |
+| NN-ISL (R2, best) | 61.2% | 54.6% | 50.9% | ~50.0% | Iterative SL on self-play data — within noise of baseline |
 
 > NN-SL baseline to beat: **50.3% vs Smart**
 
@@ -172,4 +172,34 @@ Round 2: Train on NN-ISL-1 vs NN-ISL-1 wins       → NN-ISL-2  (? vs Smart)
 
 **Data mixing:** Each round blends self-play winner data with a fraction of the original Smart data to prevent catastrophic forgetting of basic card rules.
 
-*Results will be appended here.*
+**Results (10k games each):**
+
+| Round | vs Smart | vs SL baseline |
+|-------|:--------:|:--------------:|
+| Baseline (NN-SL) | 49.9% | — |
+| Round 1 | 49.9% | = |
+| Round 2 | **50.9%** | +1.0pp |
+| Round 3 | 50.1% | +0.2pp |
+| Round 4 | 49.5% | -0.4pp |
+| Round 5 | 49.8% | -0.1pp |
+
+All differences are within statistical noise (1 stderr ≈ ±0.5pp). **Iterative SL does not meaningfully improve over the original SL baseline.**
+
+**Why it doesn't work — root cause:**
+
+The winner in NN vs NN games is not systematically making *better decisions* — they're getting *luckier card draws*. Since both players use the same underlying model, they make nearly identical choices in similar states. The winner diverges from the loser mostly when one player draws a good run of cards, not because they found a superior strategy.
+
+Training on the winner's transitions is therefore not "imitate the better player" — it's "imitate a random 50% subset of this model's own outputs." Iterating this process can't escape the original strategy: the model converges back to NN-SL each round.
+
+The evidence: val accuracy *increases* across rounds (96.8% → 97.7%) but game win rate stays flat. The model is learning to imitate the winner's moves more precisely — it's just that those moves aren't systematically better.
+
+This is the fundamental ceiling of supervised / imitation learning: **you can't exceed the quality of your training signal.** To break through the ~50% vs Smart ceiling, the training signal itself needs to be stronger than "who got luckier in this game."
+
+**What would actually work:**
+
+| Approach | Why it would help |
+|----------|-------------------|
+| MCTS-guided data | Search finds *genuinely better* moves at each state, not just the winner's lucky choices |
+| Dense reward shaping | Gives RL real signal at every step rather than just terminal ±1 |
+| Lagged self-play (RL) | Stable opponent creates a clear gradient direction; the current model can't cancel it |
+| State augmentation | Add card-counting from discard pile → the model sees information it currently ignores |
