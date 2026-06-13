@@ -15,7 +15,7 @@ Win rates over **10,000 games** each (alternating first player). Rows = the agen
 | Smart | 61.3% | 54.9% | — | 49.7% | Multi-heuristic |
 | **NN-SL** | **60.6%** | **55.2%** | **50.3%** | — | Imitation from Smart |
 | NN-PPO (fixed opp.) | 56.5% | 51.4% | 46.1% | 45.8% | PPO vs mixed pool — *regressed* |
-| **NN-SP** | TBD | TBD | TBD | TBD | PPO self-play *(in progress)* |
+| NN-SP (pure self-play) | 60.1% | 54.8% | 49.7% | 49.0% | Maintained quality, didn't improve |
 
 > NN-SL baseline to beat: **50.3% vs Smart**
 
@@ -123,20 +123,42 @@ PPO training
 
 ---
 
-### Experiment 4 — PPO Self-Play *(in progress)*
-**What:** Pure self-play — the current model plays against itself every iteration. Both players' transitions are collected (doubles data per game). Periodic evaluation every 25 iterations measures win rate vs Smart as the ground-truth signal.
+### Experiment 4 — PPO Pure Self-Play
+**What:** Pure self-play — current model plays against itself each iteration. Both players' transitions collected (doubles data per game). `target_kl=0.05` to allow meaningful updates. Periodic eval vs Smart every 25 iters as ground truth.
 
-**Setup:**
-- Warm-start from SL checkpoint
-- `target_kl=0.05` (raised from 0.01 to allow meaningful gradient updates)
-- 256 episodes/iter × 4 workers on MPS
-- Results logged every 10 iterations; eval vs Smart+Greedy every 25
+**Result:** `NN-SP vs Smart = 49.7%` — statistically equivalent to SL baseline (50.3%). Maintained quality, didn't improve.
 
-**Key assumption being tested:** Does the model improve its win rate vs Smart when trained only against itself? If yes, self-play provides a real gradient signal and serves as a foundation for a stronger agent.
+**Training curve (vs Smart, every 25 iters):**
+```
+Iter  25: 43.2%  Iter  50: 43.4%  Iter  75: 44.8%  Iter 100: 45.8%
+Iter 125: 47.6%  Iter 150: 49.0%  Iter 175: 44.8%  Iter 200: 48.2%
+Iter 225: 43.8%  Iter 250: 50.2%  Iter 275: 48.6%  Iter 300: 46.8%
+```
 
-**Early results (4 iterations):**
-- vs_smart jumped from 50.3% (SL baseline) → 52–53% in just 4 iterations ✓
-- `len` ≈ 30 turns (vs 39 for heuristic games) — self-play converges faster
-- KL values 0.02–0.04 with target_kl=0.05 allow multiple epochs per iteration
+**Failure analysis — why pure self-play doesn't work:**
 
-*Full results will be appended here.*
+The training diagnostics reveal two smoking guns:
+
+1. **`pg_loss ≈ 0` throughout.** Policy gradient is essentially zero. When both agents share the same weights W_t, the winning trajectory's gradient and losing trajectory's gradient cancel each other — they're drawn from the same distribution. Only the random asymmetry between two identical players produces any gradient, which is tiny and noisy.
+
+2. **Entropy increased from 0.11 → 0.24.** The policy became *more random*, not more strategic. In a symmetric zero-sum game, pure self-play's stable equilibrium is the Nash equilibrium — approximately uniform random play. The model was slowly drifting toward that equilibrium, which is why it stayed near 50% quality but eroded the structured knowledge from supervised training.
+
+The value function (`ev` 0.22–0.27) was healthy and well-calibrated, so the problem isn't GAE — it's that there's no stable training *direction* when both players are the same.
+
+**Insight:** Pure self-play (shared weights) doesn't work for competitive games. You need a *stable opponent target*. The fix is **frozen opponent / lagged self-play**: train against a snapshot of the model from K iterations ago. This is what AlphaGo used and what made self-play viable in practice.
+
+---
+
+### Experiment 5 — Lagged Self-Play *(next)*
+**Hypothesis:** Training against a frozen opponent (model from 10 iterations ago) creates a stable gradient direction — "am I better than my past self?" — without the cancellation problem of pure self-play.
+
+**Plan:**
+- Every 10 iterations, snapshot current model to a rolling buffer of checkpoints
+- Opponent is sampled from the buffer (uniform or recency-weighted)
+- Only the "live" agent's transitions are used for training; the frozen opponent just plays
+- Keep periodic eval vs Smart as ground truth
+
+**Key differences from pure self-play:**
+- Gradient from the live agent only (no cancellation)
+- Opponent improves at 1/10th the rate → stable training signal
+- Buffer of past selves prevents cycling (can't exploit a strategy that no longer exists in the pool)
