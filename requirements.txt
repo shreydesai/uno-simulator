@@ -1,0 +1,4 @@
+# Core simulator — pure Python, no extra deps
+# ML stack (only needed for NNAgent and training/)
+torch>=2.0.0
+numpy>=1.24.0
