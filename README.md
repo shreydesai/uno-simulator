@@ -16,6 +16,7 @@ Win rates over **10,000 games** each (alternating first player). Rows = the agen
 | **NN-SL** | **60.6%** | **55.2%** | **50.3%** | — | Imitation from Smart |
 | NN-PPO (fixed opp.) | 56.5% | 51.4% | 46.1% | 45.8% | PPO vs mixed pool — *regressed* |
 | NN-SP (pure self-play) | 60.1% | 54.8% | 49.7% | 49.0% | Maintained quality, didn't improve |
+| **NN-ISL** | TBD | TBD | TBD | TBD | Iterative SL on self-play data *(in progress)* |
 
 > NN-SL baseline to beat: **50.3% vs Smart**
 
@@ -149,16 +150,26 @@ The value function (`ev` 0.22–0.27) was healthy and well-calibrated, so the pr
 
 ---
 
-### Experiment 5 — Lagged Self-Play *(next)*
-**Hypothesis:** Training against a frozen opponent (model from 10 iterations ago) creates a stable gradient direction — "am I better than my past self?" — without the cancellation problem of pure self-play.
+### Experiment 5 — Iterative Supervised Learning on Self-Play Data *(in progress)*
 
-**Plan:**
-- Every 10 iterations, snapshot current model to a rolling buffer of checkpoints
-- Opponent is sampled from the buffer (uniform or recency-weighted)
-- Only the "live" agent's transitions are used for training; the frozen opponent just plays
-- Keep periodic eval vs Smart as ground truth
+**The pivot:** Rather than fighting RL instability, use self-play purely as a **data engine**. Two copies of the current model play each other; the winner's transitions become the next round's supervised training set. Retrain with cross-entropy. Repeat.
 
-**Key differences from pure self-play:**
-- Gradient from the live agent only (no cancellation)
-- Opponent improves at 1/10th the rate → stable training signal
-- Buffer of past selves prevents cycling (can't exploit a strategy that no longer exists in the pool)
+**Why this avoids the RL problems:**
+- No sparse reward signal — CE loss gives a dense gradient on every step
+- No gradient cancellation — we're not backpropagating through game outcomes, just treating winning moves as labels
+- No value function needed — supervised training is inherently stable
+- The model naturally gets harder training data each round as it improves
+
+**Round structure:**
+```
+Round 0: Train on SmartAgent winning games         → NN-SL  (50.3% vs Smart)
+Round 1: Train on NN-SL vs NN-SL winning games     → NN-ISL-1  (? vs Smart)
+Round 2: Train on NN-ISL-1 vs NN-ISL-1 wins       → NN-ISL-2  (? vs Smart)
+...
+```
+
+**Key hypothesis:** Self-play games between equally-matched strong agents surface more nuanced decision-making than Smart's heuristics — better color control when opponents are close to winning, more precise wild-card timing, tighter endgame play. These get distilled into the next model via CE.
+
+**Data mixing:** Each round blends self-play winner data with a fraction of the original Smart data to prevent catastrophic forgetting of basic card rules.
+
+*Results will be appended here.*

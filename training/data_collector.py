@@ -204,3 +204,83 @@ class DataCollector:
             colors=np.array(all_colors,  dtype=np.int32),
             rewards=np.array(all_rewards, dtype=np.float32),
         )
+
+
+# ------------------------------------------------------------------ #
+#  Self-play data collection                                           #
+# ------------------------------------------------------------------ #
+
+def collect_self_play_data(
+    model,
+    n_games:      int,
+    greedy:       bool = False,
+    record_loser: bool = False,
+    verbose:      bool = False,
+) -> "TransitionDataset":
+    """
+    Run *model* vs *model* and collect supervised training data.
+
+    Both players share the same weights but operate independently.
+    By default only the winner's transitions are kept — these serve as
+    the "teacher signal" for the next round of supervised training.
+
+    Parameters
+    ----------
+    model        : UnoNet (CPU)
+    n_games      : number of self-play games to run
+    greedy       : if True both players use argmax; if False they sample
+                   (sampling → more diverse games and harder opponents)
+    record_loser : if True, also store losing transitions with reward=-1
+    verbose      : print progress every 500 games
+    """
+    from uno.strategies.nn_agent import NNAgent
+
+    all_states:  list[np.ndarray] = []
+    all_actions: list[int]        = []
+    all_masks:   list[np.ndarray] = []
+    all_colors:  list[int]        = []
+    all_rewards: list[float]      = []
+    wins = 0
+
+    for i in range(n_games):
+        # Two independent agents sharing the same weights
+        inner0 = NNAgent("NN_0", model, greedy=greedy)
+        inner1 = NNAgent("NN_1", model, greedy=greedy)
+        rec0   = _RecordingAgent(inner0)   # rec0.name == "NN_0"
+        rec1   = _RecordingAgent(inner1)   # rec1.name == "NN_1"
+
+        order  = [rec0, rec1] if i % 2 == 0 else [rec1, rec0]
+        result = UnoGame(order).play()
+        recs0  = rec0.pop_records()
+        recs1  = rec1.pop_records()
+
+        won0   = result.winner == "NN_0"
+        wins  += int(won0)
+
+        for recs, won in [(recs0, won0), (recs1, not won0)]:
+            if won or record_loser:
+                reward = 1.0 if won else -1.0
+                for r in recs:
+                    all_states.append(r["state"])
+                    all_actions.append(r["action"])
+                    all_masks.append(r["mask"])
+                    all_colors.append(
+                        r["color_action"] if r["color_action"] is not None else -1
+                    )
+                    all_rewards.append(reward)
+
+        if verbose and (i + 1) % 500 == 0:
+            wr = wins / (i + 1) * 100
+            print(
+                f"  [{i+1:>6,}/{n_games:,}]  "
+                f"win_rate={wr:.1f}%  "
+                f"transitions={len(all_states):,}"
+            )
+
+    return TransitionDataset(
+        states=np.array(all_states,  dtype=np.float32),
+        actions=np.array(all_actions, dtype=np.int32),
+        masks=np.array(all_masks,    dtype=bool),
+        colors=np.array(all_colors,  dtype=np.int32),
+        rewards=np.array(all_rewards, dtype=np.float32),
+    )
